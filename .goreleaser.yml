@@ -1,3 +1,5 @@
+version: 2
+
 project_name: c2tgo
 
 before:
@@ -23,27 +25,20 @@ builds:
       - -trimpath
     main: ./
     binary: c2tgo
-    no_unique_dist_dir: true
 
 archives:
-  - replacements:
-      darwin: Darwin
-      linux: Linux
-      windows: Windows
-      386: i386
-      amd64: x86_64
-    format: binary
+  - formats:
+      - binary
     name_template: "c2tgo_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}"
 
 checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ .Tag }}-next"
+  version_template: "{{ .Tag }}-next"
 
 changelog:
   sort: asc
   filters:
     exclude:
       - '^docs:'
-      - '^test:'
