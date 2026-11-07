@@ -280,10 +280,7 @@ func pageBreakLine(tmpl string, pageNum, totalPages int) string {
 // pageBreakBytes はページ区切り行1行分のバイト数（改行込み）を返す。
 func pageBreakBytes(tmpl string, pageNum, totalPages int) int64 {
 	line := pageBreakLine(tmpl, pageNum, totalPages)
-	if line == "" {
-		return 0
-	}
-	return int64(len(line) + 1) // +1 for "\n"
+	return lineBytes(line)
 }
 
 // printTable は、maxBytes / maxLines を超えないように表をページ分割して出力する。
@@ -329,10 +326,7 @@ func printTable(t tableData, maxBytes int64, maxLines int, pageBreak string) {
 	totalPages := len(pages)
 	for pi, p := range pages {
 		if pi > 0 {
-			line := pageBreakLine(pageBreak, pi+1, totalPages)
-			if line != "" {
-				fmt.Println(line)
-			}
+			fmt.Println(pageBreakLine(pageBreak, pi+1, totalPages))
 		}
 		var out []string
 		if t.codeBlock {
