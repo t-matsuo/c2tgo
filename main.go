@@ -56,6 +56,7 @@ func main() {
 	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
 	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
 	tableMaxLine := flag.Int("table-max-line", 0, "maximum number of data rows (excluding header/borders) per page (0 for unlimited)")
+	pageBreak := flag.String("page-break", "<!-- page %page/%total -->", "page separator template between pages. use %page and %total as placeholders. empty string disables separator")
 	format := flag.String("format", "md", "output format: md, grid, slack")
 	flag.Parse()
 
@@ -120,15 +121,15 @@ func main() {
 		t := buildGridSlackTable(rows, maxCols, *cellMaxWidth,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
 			*cornerChar, *inlineHBorder, *inlineVBorder, false)
-		printTable(t, *tableMaxByte, *tableMaxLine)
+		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
 	case "slack":
 		t := buildGridSlackTable(rows, maxCols, *cellMaxWidth,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
 			*cornerChar, *inlineHBorder, *inlineVBorder, true)
-		printTable(t, *tableMaxByte, *tableMaxLine)
+		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
 	default: // md
 		t := buildMarkdownTable(rows, maxCols, *lbReplacer, *cellMaxWidth, *mdCodeBlock)
-		printTable(t, *tableMaxByte, *tableMaxLine)
+		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
 	}
 }
 
@@ -264,15 +265,30 @@ func headerBytes(t tableData) int64 {
 	return total
 }
 
-// separatorBytes はページ区切り行 "----page X/Y----" のバイト数（改行込み）を返す
-func separatorBytes(pageNum, totalPages int) int64 {
-	return int64(len(fmt.Sprintf("# ----page %d/%d----\n", pageNum, totalPages)))
+// pageBreakLine はページ区切り行の文字列を組み立てて返す。
+// tmpl が空文字列の場合は空文字列を返す。
+// %page はページ番号、%total は総ページ数に置き換えられる。
+func pageBreakLine(tmpl string, pageNum, totalPages int) string {
+	if tmpl == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(tmpl, "%page", fmt.Sprintf("%d", pageNum))
+	s = strings.ReplaceAll(s, "%total", fmt.Sprintf("%d", totalPages))
+	return s
 }
 
-// printTable は、maxBytes を超えないように表をページ分割して出力する。
+// pageBreakBytes はページ区切り行1行分のバイト数（改行込み）を返す。
+func pageBreakBytes(tmpl string, pageNum, totalPages int) int64 {
+	line := pageBreakLine(tmpl, pageNum, totalPages)
+	if line == "" {
+		return 0
+	}
+	return int64(len(line) + 1) // +1 for "\n"
+}
+
+// printTable は、maxBytes / maxLines を超えないように表をページ分割して出力する。
 // 2 ページ目以降もヘッダーを付け、各ページは必ず完結した表になる。
-// 区切り行は "----page 2/4----" の形式（現在ページ/最大ページ数）。
-func printTable(t tableData, maxBytes int64, maxLines int) {
+func printTable(t tableData, maxBytes int64, maxLines int, pageBreak string) {
 	// 各ユニットは「データ行＋行間罫線」で構成されるとみなす。
 	// 最終ユニットの罫線だけ下罫線文字に差し替える（長さは同一なのでバイト数に影響しない）。
 	withBorder := t.inlineBorder != ""
@@ -290,11 +306,11 @@ func printTable(t tableData, maxBytes int64, maxLines int) {
 	}
 	hSize := headerBytes(t)
 
-	// ページ区切り行 "----page X/Y----" のバイト数は総ページ数（Y の桁数）に依存し、
+	// ページ区切り行のバイト数は総ページ数（%total の桁数など）に依存し、
 	// 総ページ数は区切りのバイト数にも依存する（循環参照）。
 	// そのため、まず概算値でページング → 確定した総ページ数から実際の区切りサイズを
 	// 計算 → 再ページング、を 2〜3 回繰り返して収束させる。
-	reserve := separatorBytes(1, 1) // 初期概算
+	reserve := pageBreakBytes(pageBreak, 1, 1) // 初期概算
 	var pages []page
 	for attempt := 0; attempt < 3; attempt++ {
 		pages = paginate(units, hSize, fenceCost, maxBytes, reserve, maxLines)
@@ -302,7 +318,7 @@ func printTable(t tableData, maxBytes int64, maxLines int) {
 			break
 		}
 		// 全ページ中で最も長くなる区切り（ページ番号＝総ページ数）を基準に再計算
-		longest := separatorBytes(len(pages), len(pages))
+		longest := pageBreakBytes(pageBreak, len(pages), len(pages))
 		if longest == reserve {
 			break
 		}
@@ -313,7 +329,10 @@ func printTable(t tableData, maxBytes int64, maxLines int) {
 	totalPages := len(pages)
 	for pi, p := range pages {
 		if pi > 0 {
-			fmt.Printf("# ----page %d/%d----\n", pi+1, totalPages)
+			line := pageBreakLine(pageBreak, pi+1, totalPages)
+			if line != "" {
+				fmt.Println(line)
+			}
 		}
 		var out []string
 		if t.codeBlock {

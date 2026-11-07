@@ -61,6 +61,7 @@ cat data.csv | ./c2tgo --format=slack
 | `--md-code-block` | Wrap each Markdown cell content in code blocks. | `false` |
 | `--table-max-byte` | Maximum byte size per page of table output. `0` for unlimited. | `0` |
 | `--table-max-line` | Maximum number of data rows (excluding header/borders) per page. `0` for unlimited. | `0` |
+| `--page-break` | Page separator template. Use `%page` and `%total` as placeholders. Empty string disables the separator. | `<!-- page %page/%total -->` |
 
 ## Formatting Details
 
@@ -142,13 +143,13 @@ $ cat data.csv | ./c2tgo --format grid --table-max-byte 200
 | Alice | 30  | Tokyo    |
 |       |     | Hokkaido |
 +-------+-----+----------+
-# ----page 2/3----
+<!-- page 2/3 -->
 +-------+-----+----------+
 | Name  | Age | City     |
 +=======+=====+==========+
 | Bob   | 25  | Osaka    |
 +-------+-----+----------+
-# ----page 3/3----
+<!-- page 3/3 -->
 +-------+-----+----------+
 | Name  | Age | City     |
 +=======+=====+==========+
