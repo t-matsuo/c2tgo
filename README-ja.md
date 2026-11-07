@@ -57,9 +57,10 @@ cat data.csv | ./c2tgo --format=slack
 | `--corner-char` | `grid`/`slack` の角および接合点に使用する1文字。 | `+` |
 | `--inline-h-border` | `grid`/`slack` の内部水平罫線に使用する1文字。 | `-` |
 | `--inline-v-border` | `grid`/`slack` の内部垂直罫線に使用する1文字。 | `\|` |
-| `--cell-max-width` | セル行あたりの最大表示幅。`-1` で無制限、最小値は3。 | `-1` |
+| `--cell-max-width` | セル行あたりの最大表示幅。`0` で無制限、最小値は3。 | `0` |
 | `--md-code-block` | Markdownの各セルの内容をコードブロックで囲む。 | `false` |
-| `--max-table-byte` | テーブル出力1ページあたりの最大バイトサイズ。`-1` で無制限。 | `-1` |
+| `--table-max-byte` | テーブル出力1ページあたりの最大バイトサイズ。`0` で無制限。 | `0` |
+| `--table-max-line` | 1ページあたりの最大データ行数（ヘッダー・罫線除く）。`0` で無制限。 | `0` |
 
 ## フォーマットの詳細
 
@@ -134,7 +135,7 @@ $ cat data.csv | ./c2tgo --format grid --cell-max-width 5
 ```
 
 ```
-$ cat data.csv | ./c2tgo --format grid --max-table-byte 200
+$ cat data.csv | ./c2tgo --format grid --table-max-byte 200
 +-------+-----+----------+
 | Name  | Age | City     |
 +=======+=====+==========+

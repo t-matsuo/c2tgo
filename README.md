@@ -57,9 +57,10 @@ cat data.csv | ./c2tgo --format=slack
 | `--corner-char` | Single character for corners and junction points (grid/slack only). | `+` |
 | `--inline-h-border` | Single character for inline horizontal borders (grid/slack only). | `-` |
 | `--inline-v-border` | Single character for inline vertical borders (grid/slack only). | `\|` |
-| `--cell-max-width` | Maximum display width per cell row. `-1` for unlimited, minimum 3. | `-1` |
+| `--cell-max-width` | Maximum display width per cell row. `0` for unlimited, minimum 3. | `0` |
 | `--md-code-block` | Wrap each Markdown cell content in code blocks. | `false` |
-| `--max-table-byte` | Maximum byte size per page of table output. `-1` for unlimited. | `-1` |
+| `--table-max-byte` | Maximum byte size per page of table output. `0` for unlimited. | `0` |
+| `--table-max-line` | Maximum number of data rows (excluding header/borders) per page. `0` for unlimited. | `0` |
 
 ## Formatting Details
 
@@ -134,7 +135,7 @@ $ cat data.csv | ./c2tgo --format grid --cell-max-width 5
 ```
 
 ```
-$ cat data.csv | ./c2tgo --format grid --max-table-byte 200
+$ cat data.csv | ./c2tgo --format grid --table-max-byte 200
 +-------+-----+----------+
 | Name  | Age | City     |
 +=======+=====+==========+

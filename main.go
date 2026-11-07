@@ -52,9 +52,10 @@ func main() {
 	cornerChar := flag.String("corner-char", "+", "single char for corners and junction points (grid/slack only)")
 	inlineHBorder := flag.String("inline-h-border", "-", "single char for inline horizontal borders (grid/slack only)")
 	inlineVBorder := flag.String("inline-v-border", "|", "single char for inline vertical borders (grid/slack only)")
-	cellMaxWidth := flag.Int("cell-max-width", -1, "maximum display width per cell row (-1 for unlimited, minimum 3)")
+	cellMaxWidth := flag.Int("cell-max-width", 0, "maximum display width per cell row (0 for unlimited, minimum 3)")
 	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
-	maxTableByte := flag.Int64("max-table-byte", -1, "maximum byte size per page of table output (-1 for unlimited)")
+	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
+	tableMaxLine := flag.Int("table-max-line", 0, "maximum number of data rows (excluding header/borders) per page (0 for unlimited)")
 	format := flag.String("format", "md", "output format: md, grid, slack")
 	flag.Parse()
 
@@ -69,8 +70,14 @@ func main() {
 	checkSingleChar("--inline-v-border", *inlineVBorder)
 
 	// --cell-max-width の検証
-	if *cellMaxWidth != -1 && *cellMaxWidth < 3 {
-		fmt.Fprintln(os.Stderr, "Error: --cell-max-width must be -1 (unlimited) or >= 3")
+	if *cellMaxWidth != 0 && *cellMaxWidth < 3 {
+		fmt.Fprintln(os.Stderr, "Error: --cell-max-width must be 0 (unlimited) or >= 3")
+		os.Exit(1)
+	}
+
+	// --table-max-line の検証
+	if *tableMaxLine < 0 {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-line must be >= 0 (0 for unlimited)")
 		os.Exit(1)
 	}
 
@@ -113,15 +120,15 @@ func main() {
 		t := buildGridSlackTable(rows, maxCols, *cellMaxWidth,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
 			*cornerChar, *inlineHBorder, *inlineVBorder, false)
-		printTable(t, *maxTableByte)
+		printTable(t, *tableMaxByte, *tableMaxLine)
 	case "slack":
 		t := buildGridSlackTable(rows, maxCols, *cellMaxWidth,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
 			*cornerChar, *inlineHBorder, *inlineVBorder, true)
-		printTable(t, *maxTableByte)
+		printTable(t, *tableMaxByte, *tableMaxLine)
 	default: // md
 		t := buildMarkdownTable(rows, maxCols, *lbReplacer, *cellMaxWidth, *mdCodeBlock)
-		printTable(t, *maxTableByte)
+		printTable(t, *tableMaxByte, *tableMaxLine)
 	}
 }
 
@@ -145,7 +152,7 @@ func buildMarkdownTable(rows [][]string, maxCols int, lineBreak string, cellMaxW
 			s = strings.ReplaceAll(s, "\r", lineBreak)
 			s = strings.ReplaceAll(s, "\n", lineBreak)
 			// 長さ制限を適用（``` は含めない）
-			if cellMaxWidth != -1 && getDisplayWidth(s) > cellMaxWidth {
+			if cellMaxWidth > 0 && getDisplayWidth(s) > cellMaxWidth {
 				s = truncateWithEllipsis(s, cellMaxWidth)
 			}
 			// コードブロックで囲む
@@ -184,7 +191,7 @@ func buildGridSlackTable(rows [][]string, maxCols int, cellMaxWidth int, top, bo
 	}
 
 	// 各論理行に cellMaxWidth 制限を適用
-	if cellMaxWidth != -1 {
+	if cellMaxWidth > 0 {
 		for _, row := range cellLines {
 			for c := range row {
 				for l := range row[c] {
@@ -265,7 +272,7 @@ func separatorBytes(pageNum, totalPages int) int64 {
 // printTable は、maxBytes を超えないように表をページ分割して出力する。
 // 2 ページ目以降もヘッダーを付け、各ページは必ず完結した表になる。
 // 区切り行は "----page 2/4----" の形式（現在ページ/最大ページ数）。
-func printTable(t tableData, maxBytes int64) {
+func printTable(t tableData, maxBytes int64, maxLines int) {
 	// 各ユニットは「データ行＋行間罫線」で構成されるとみなす。
 	// 最終ユニットの罫線だけ下罫線文字に差し替える（長さは同一なのでバイト数に影響しない）。
 	withBorder := t.inlineBorder != ""
@@ -290,7 +297,7 @@ func printTable(t tableData, maxBytes int64) {
 	reserve := separatorBytes(1, 1) // 初期概算
 	var pages []page
 	for attempt := 0; attempt < 3; attempt++ {
-		pages = paginate(units, hSize, fenceCost, maxBytes, reserve)
+		pages = paginate(units, hSize, fenceCost, maxBytes, reserve, maxLines)
 		if len(pages) <= 1 {
 			break
 		}
@@ -336,12 +343,12 @@ func printTable(t tableData, maxBytes int64) {
 	}
 }
 
-// paginate は、maxBytes を超えないようにデータユニットをページへ割り振る。
+// paginate は、maxBytes または maxLines を超えないようにデータユニットをページへ割り振る。
 // reserve はページ区切り行 1 行分の見込みバイト数。
-func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64) []page {
+func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxLines int) []page {
 	var pages []page
 
-	if maxBytes <= 0 {
+	if maxBytes <= 0 && maxLines <= 0 {
 		// 制限なし: 1 ページに全部
 		p := page{}
 		for i := range units {
@@ -353,32 +360,57 @@ func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64) []pa
 
 	var cur []int // 現在のページに割り当てたユニットのインデックス
 	var curSize int64
+	var curLines int
 	flush := func() {
 		if len(cur) > 0 {
 			pages = append(pages, page{unitIdx: cur})
 			cur = nil
 			curSize = 0
+			curLines = 0
 		}
 	}
 
 	for i, u := range units {
-		// 区切り行が挟まる可能性を見込んで余裕を確保する
-		avail := maxBytes - reserve
+		needFlush := false
 
-		// ヘッダーが入らないほど小さい maxBytes は無意味なのでエラーにする
-		if avail < hSize+fenceCost {
-			fmt.Fprintf(os.Stderr, "Error: --max-table-byte is too small to hold the table header (%d bytes required)\n", hSize+fenceCost)
-			os.Exit(1)
+		// maxBytes 制限がある場合
+		if maxBytes > 0 {
+			// 区切り行が挟まる可能性を見込んで余裕を確保する
+			avail := maxBytes - reserve
+
+			// ヘッダーが入らないほど小さい maxBytes は無意味なのでエラーにする
+			if avail < hSize+fenceCost {
+				fmt.Fprintf(os.Stderr, "Error: --table-max-byte is too small to hold the table header (%d bytes required)\n", hSize+fenceCost)
+				os.Exit(1)
+			}
+
+			if curSize+u.size > avail-hSize && len(cur) > 0 {
+				needFlush = true
+			}
 		}
 
-		if curSize+u.size > avail-hSize && len(cur) > 0 {
+		// maxLines 制限がある場合
+		if maxLines > 0 && curLines >= maxLines && len(cur) > 0 {
+			needFlush = true
+		}
+
+		if needFlush {
 			flush()
 		}
+
 		cur = append(cur, i)
 		curSize += u.size
+		curLines++
 
 		// ヘッダー＋1 ユニットすら入らない場合は、1 ユニットでページを強制成立させる
-		if curSize > avail-hSize {
+		if maxBytes > 0 {
+			avail := maxBytes - reserve
+			if curSize > avail-hSize {
+				flush()
+			}
+		}
+
+		if maxLines > 0 && curLines >= maxLines {
 			flush()
 		}
 	}
