@@ -18,13 +18,13 @@ CSVデータを標準入力またはファイルから受け取り、Markdown、
 アプリケーションをビルドするには、Goがインストールされていることを確認し、以下を実行してください：
 
 ```bash
-go build -o c2tgo main.go
+go build -o c2tgo .
 ```
 
 ビルド日時を `--version` に埋め込む場合は、以下のようにビルドしてください：
 
 ```bash
-go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)" -o c2tgo main.go
+go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)" -o c2tgo .
 ```
 
 ## 使い方
@@ -74,6 +74,7 @@ cat data.csv | ./c2tgo -o md
 | `--inline-h-border` | `text` の内部水平罫線に使用する1文字。空文字列で内部水平罫線を無効化。 | `-` |
 | `--inline-v-border` | `text` の内部垂直罫線に使用する1文字。 | `\|` |
 | `--cell-max-width` | セル行あたりの最大表示幅。値が1つの場合は全列に適用。カンマ区切りで各列の幅を指定可能（例：`5,6,7`）。`0` は未制限を表す。最小値は3。 | `0` |
+| `--auto-fit`, `-a` | `text` 出力時にテーブル幅をターミナル幅に合わせる。`--cell-max-width` は無視される。 | `false` |
 | `--md-code-block` | Markdownの各セルの内容をコードブロックで囲む。 | `false` |
 | `--table-max-byte` | テーブル出力1ページあたりの最大バイトサイズ。`0` で無制限。 | `0` |
 | `--table-max-line` | 1ページあたりの最大データ行数（ヘッダー・罫線除く）。`0` で無制限。 | `0` |

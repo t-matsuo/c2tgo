@@ -18,13 +18,13 @@ A command-line tool that takes CSV data from standard input or a file and format
 To build the application, ensure you have Go installed and run:
 
 ```bash
-go build -o c2tgo main.go
+go build -o c2tgo .
 ```
 
 To embed the build date/time into `--version`, build with:
 
 ```bash
-go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)" -o c2tgo main.go
+go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)" -o c2tgo .
 ```
 
 ## Usage
@@ -74,6 +74,7 @@ cat data.csv | ./c2tgo -o md
 | `--inline-h-border` | Single character for inline horizontal borders (text only). Empty string disables inline horizontal borders. | `-` |
 | `--inline-v-border` | Single character for inline vertical borders (text only). | `\|` |
 | `--cell-max-width` | Maximum display width per cell row. A single value applies to all columns. A comma-separated list specifies width per column (e.g. `5,6,7`). Use `0` for unlimited per column. Minimum 3. | `0` |
+| `--auto-fit`, `-a` | Fit the `text` table width to the terminal width. Ignores `--cell-max-width`. | `false` |
 | `--md-code-block` | Wrap each Markdown cell content in code blocks. | `false` |
 | `--table-max-byte` | Maximum byte size per page of table output. `0` for unlimited. | `0` |
 | `--table-max-line` | Maximum number of data rows (excluding header/borders) per page. `0` for unlimited. | `0` |

@@ -25,7 +25,28 @@ func buildBinary(t *testing.T) string {
 // run は c2tgo バイナリをサブプロセスで実行する。
 func run(t *testing.T, bin string, input string, args ...string) string {
 	t.Helper()
+	return runWithEnv(t, bin, os.Environ(), input, args...)
+}
+
+// envWithColumns は COLUMNS 環境変数を指定した値に設定した環境変数リストを返す。
+// 既存の COLUMNS があれば置き換える。
+func envWithColumns(cols int) []string {
+	env := os.Environ()
+	var out []string
+	for _, e := range env {
+		if !strings.HasPrefix(e, "COLUMNS=") {
+			out = append(out, e)
+		}
+	}
+	out = append(out, fmt.Sprintf("COLUMNS=%d", cols))
+	return out
+}
+
+// runWithEnv は指定した環境変数で c2tgo バイナリをサブプロセスで実行する。
+func runWithEnv(t *testing.T, bin string, env []string, input string, args ...string) string {
+	t.Helper()
 	cmd := exec.Command(bin, args...)
+	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -258,6 +279,42 @@ func TestDefaultLineBreakMarkdown(t *testing.T) {
 	stdout := run(t, bin, input, "--output=md")
 	if !strings.Contains(stdout, "| Alice | Tokyo<br>Osaka |") {
 		t.Errorf("expected default <br> conversion in markdown:\n%s", stdout)
+	}
+}
+
+func TestAutoFitText(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Description\nAlice,This is a very long description text\n"
+	stdout := runWithEnv(t, bin, envWithColumns(40), input, "--output=text", "--auto-fit")
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	for _, line := range lines {
+		if w := getDisplayWidth(line); w > 40 {
+			t.Errorf("line exceeds terminal width 40: %q (width=%d)", line, w)
+		}
+	}
+}
+
+func TestAutoFitTextShorthand(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Description\nAlice,This is a very long description text\n"
+	stdout := runWithEnv(t, bin, envWithColumns(40), input, "--output=text", "-a")
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	for _, line := range lines {
+		if w := getDisplayWidth(line); w > 40 {
+			t.Errorf("line exceeds terminal width 40 with -a shorthand: %q (width=%d)", line, w)
+		}
+	}
+}
+
+func TestAutoFitIgnoresCellMaxWidth(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Description\nAlice,This is a very long description text\n"
+	stdout := runWithEnv(t, bin, envWithColumns(100), input, "--output=text", "--auto-fit", "--cell-max-width=5")
+	if strings.Contains(stdout, "...") {
+		t.Errorf("--cell-max-width should be ignored with --auto-fit:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "very long description text") {
+		t.Errorf("description should not be truncated with --auto-fit:\n%s", stdout)
 	}
 }
 

@@ -59,6 +59,8 @@ func main() {
 	inlineHBorder := flag.String("inline-h-border", "-", "single char for inline horizontal borders (text only). empty string disables inline borders")
 	inlineVBorder := flag.String("inline-v-border", "|", "single char for inline vertical borders (text only)")
 	cellMaxWidth := flag.String("cell-max-width", "0", "maximum display width per cell row. single value applies to all columns, or comma-separated list per column (e.g. 5,6,7). 0 for unlimited, minimum 3")
+	autoFit := flag.Bool("auto-fit", false, "auto-fit text table width to terminal (text only). ignores --cell-max-width")
+	flag.BoolVar(autoFit, "a", false, "auto-fit text table width to terminal (text only, shorthand)")
 	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
 	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
 	tableMaxLine := flag.Int("table-max-line", 0, "maximum number of data rows (excluding header/borders) per page (0 for unlimited)")
@@ -200,7 +202,7 @@ func main() {
 	case "text":
 		t := buildTextTable(rows, maxCols, cellMaxWidths,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
-			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak)
+			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak, *autoFit)
 		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
 	default: // md
 		t := buildMarkdownTable(rows, maxCols, lineBreak, cellMaxWidths, *mdCodeBlock)
@@ -315,7 +317,7 @@ func buildMarkdownTable(rows [][]string, maxCols int, lineBreak string, cellMaxW
 }
 
 // Text 形式の表データを組み立てる
-func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bottom, left, right, header, corner, inlineH, inlineV, lineBreak string) tableData {
+func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bottom, left, right, header, corner, inlineH, inlineV, lineBreak string, autoFit bool) tableData {
 	// 各セルを「論理行」に分解
 	// lineBreak が指定されていればセル内改行を置き換えて 1 行にまとめる。
 	// lineBreak が空なら元の改行で分割する。
@@ -336,32 +338,49 @@ func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bott
 		}
 	}
 
-	// 各論理行に cellMaxWidth 制限を適用
+	// 各カラムの最大文字幅を計算（全データ行から算出するため、どのページでも同じ幅になる）
+	naturalWidths := make([]int, maxCols)
 	for _, row := range cellLines {
-		for c := range row {
-			maxW := cellMaxWidths[c]
-			if maxW > 0 {
-				for l := range row[c] {
-					if getDisplayWidth(row[c][l]) > maxW {
-						row[c][l] = truncateWithEllipsis(row[c][l], maxW)
-					}
+		for c, lines := range row {
+			for _, line := range lines {
+				if w := getDisplayWidth(line); w > naturalWidths[c] {
+					naturalWidths[c] = w
 				}
 			}
 		}
 	}
 
-	// 各カラムの最大文字幅を計算（全データ行から算出するため、どのページでも同じ幅になる）
+	// 列幅を決定する
 	colWidths := make([]int, maxCols)
-	for _, row := range cellLines {
-		for c, lines := range row {
-			maxW := cellMaxWidths[c]
-			for _, line := range lines {
-				w := getDisplayWidth(line)
-				if maxW > 0 && w > maxW {
-					w = maxW
+	if autoFit {
+		colWidths = calculateAutoFitWidths(naturalWidths, maxCols, left, right, inlineV, corner)
+	} else {
+		// 各論理行に cellMaxWidth 制限を適用
+		for _, row := range cellLines {
+			for c := range row {
+				maxW := cellMaxWidths[c]
+				if maxW > 0 {
+					for l := range row[c] {
+						if getDisplayWidth(row[c][l]) > maxW {
+							row[c][l] = truncateWithEllipsis(row[c][l], maxW)
+						}
+					}
 				}
-				if w > colWidths[c] {
-					colWidths[c] = w
+			}
+		}
+
+		// cellMaxWidth の制限を反映して列幅を計算
+		for _, row := range cellLines {
+			for c, lines := range row {
+				maxW := cellMaxWidths[c]
+				for _, line := range lines {
+					w := getDisplayWidth(line)
+					if maxW > 0 && w > maxW {
+						w = maxW
+					}
+					if w > colWidths[c] {
+						colWidths[c] = w
+					}
 				}
 			}
 		}
@@ -385,6 +404,79 @@ func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bott
 		t.units = append(t.units, buildRowLines(row, colWidths, inlineV, left, right))
 	}
 	return t
+}
+
+// calculateAutoFitWidths はターミナル幅に収まるように列幅を計算する。
+// 自然幅の合計がターミナル幅に収まる場合は自然幅をそのまま使用する。
+// 収まらない場合は、幅の広い列から優先的に縮小しつつ、各列が自然幅に対して
+// 極端に短くならないように最小幅を保証する。
+func calculateAutoFitWidths(natural []int, maxCols int, left, right, inlineV, corner string) []int {
+	terminalWidth := getTerminalWidth()
+	overhead := tableOverhead(maxCols, left, right, inlineV, corner)
+	available := terminalWidth - overhead
+	if available < 0 {
+		available = 0
+	}
+
+	widths := append([]int(nil), natural...)
+	total := sumInts(widths)
+	if total <= available {
+		return widths
+	}
+
+	// 縮小が必要な場合、各列の最小幅を自然幅の 30% または 3 の大きい方で決定
+	minWidths := make([]int, maxCols)
+	for c, w := range natural {
+		minW := int(float64(w) * 0.3)
+		if minW < 3 {
+			minW = 3
+		}
+		minWidths[c] = minW
+	}
+
+	// 最も幅の広い列から優先的に 1 文字ずつ縮小する。
+	// これにより、改行は幅の広いセルに優先的に入る。
+	for total > available {
+		widest := -1
+		for c := 0; c < maxCols; c++ {
+			if widths[c] > minWidths[c] {
+				if widest == -1 || widths[c] > widths[widest] {
+					widest = c
+				}
+			}
+		}
+		if widest == -1 {
+			// これ以上縮小できない場合ははみ出すが仕方ない
+			break
+		}
+		widths[widest]--
+		total--
+	}
+
+	return widths
+}
+
+// tableOverhead は text 形式のテーブルにおいて、列コンテンツ以外の文字幅を返す。
+// 例: "| a | b |" では列幅の合計に加えて左右の境界とスペース、区切り文字が必要。
+func tableOverhead(maxCols int, left, right, inlineV, corner string) int {
+	// 行のオーバーヘッド: left + right + 2*maxCols スペース + (maxCols-1) inlineV
+	rowOverhead := 1 + 1 + 2*maxCols + (maxCols - 1)
+	// 罫線行のオーバーヘッド: (maxCols+1) 角文字 + 2*maxCols の罫線パディング
+	borderOverhead := (maxCols + 1) + 2*maxCols
+	// 同じ幅になるはずだが、安全の大きい方を採用
+	if rowOverhead > borderOverhead {
+		return rowOverhead
+	}
+	return borderOverhead
+}
+
+// sumInts はスライスの合計を返す。
+func sumInts(xs []int) int {
+	total := 0
+	for _, x := range xs {
+		total += x
+	}
+	return total
 }
 
 // ---- 出力（ページ分割を含む）----
