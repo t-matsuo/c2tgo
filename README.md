@@ -1,6 +1,6 @@
 # c2tgo - CSV Table Formatter
 
-A command-line tool that takes CSV data from standard input or a file and formats it into a beautiful table for different platforms, including Markdown, ASCII text table, and Slack.
+A command-line tool that takes CSV data from standard input or a file and formats it into a beautiful table for different platforms, including Markdown, ASCII text table.
 
 ## Features
 
