@@ -1,5 +1,7 @@
 # c2tgo - CSV Table Formatter
 
+[🇺🇸 English version is here](README.md)
+
 CSVデータを標準入力またはファイルから受け取り、Markdown、ASCIIテキストテーブルなど、さまざまなプラットフォーム向けに美しいテーブルにフォーマットするコマンドラインツールです。
 
 ## 機能
