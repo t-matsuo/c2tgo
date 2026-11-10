@@ -45,10 +45,11 @@ type page struct {
 	unitIdx []int
 }
 
-// sizedUnit はデータユニットとそのバイト数
+// sizedUnit はデータユニットとそのバイト数・表示行数
 type sizedUnit struct {
-	lines []string
-	size  int64
+	lines     []string
+	size      int64
+	lineCount int
 }
 
 func main() {
@@ -71,7 +72,12 @@ func main() {
 	flag.IntVar(tableMaxWidth, "w", 0, "maximum display width of a single text table row (shorthand)")
 	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
 	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
-	tableMaxLine := flag.Int("table-max-line", 0, "maximum number of data rows (excluding header/borders) per page (0 for unlimited)")
+	tableMaxRows := flag.Int("table-max-rows", 0, "maximum number of data rows per page (0 for unlimited)")
+	flag.IntVar(tableMaxRows, "R", 0, "maximum number of data rows per page (shorthand)")
+	tableMaxLines := flag.Int("table-max-lines", 0, "maximum number of displayed data lines per page, accounting for newlines inside cells (0 for unlimited)")
+	flag.IntVar(tableMaxLines, "L", 0, "maximum number of displayed data lines per page (shorthand)")
+	// --table-max-line は --table-max-rows の下位互換エイリアス（非推奨）
+	tableMaxLine := flag.Int("table-max-line", 0, "deprecated: use --table-max-rows")
 	pageBreak := flag.String("page-break", "<!-- page %page/%total -->", "page separator template between pages. use %page and %total as placeholders. empty string disables separator")
 	output := flag.String("output", "text", "output format: md or text")
 	flag.StringVar(output, "o", "text", "output format: md or text (shorthand)")
@@ -118,10 +124,26 @@ func main() {
 	checkSingleCharOrEmpty("--inline-h-border", *inlineHBorder)
 	checkSingleChar("--inline-v-border", *inlineVBorder)
 
-	// --table-max-line の検証
+	// --table-max-line は --table-max-rows の非推奨エイリアス
 	if *tableMaxLine < 0 {
 		fmt.Fprintln(os.Stderr, "Error: --table-max-line must be >= 0 (0 for unlimited)")
 		os.Exit(1)
+	}
+	if *tableMaxRows < 0 {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-rows must be >= 0 (0 for unlimited)")
+		os.Exit(1)
+	}
+	if *tableMaxLines < 0 {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-lines must be >= 0 (0 for unlimited)")
+		os.Exit(1)
+	}
+	if isFlagSet("table-max-line") && isFlagSet("table-max-rows") {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-line is deprecated and cannot be used with --table-max-rows")
+		os.Exit(1)
+	}
+	effectiveTableMaxRows := *tableMaxRows
+	if isFlagSet("table-max-line") {
+		effectiveTableMaxRows = *tableMaxLine
 	}
 
 	// --table-max-width の検証
@@ -251,10 +273,10 @@ func main() {
 		t := buildTextTable(rows, maxCols, cellMaxWidths,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
 			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak, *autoFit, fitWidth)
-		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
+		printTable(t, *tableMaxByte, effectiveTableMaxRows, *tableMaxLines, *pageBreak)
 	default: // md
 		t := buildMarkdownTable(rows, maxCols, lineBreak, cellMaxWidths, *mdCodeBlock)
-		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
+		printTable(t, *tableMaxByte, effectiveTableMaxRows, *tableMaxLines, *pageBreak)
 	}
 }
 
@@ -580,9 +602,9 @@ func pageBreakBytes(tmpl string, pageNum, totalPages int) int64 {
 	return lineBytes(line)
 }
 
-// printTable は、maxBytes / maxLines を超えないように表をページ分割して出力する。
+// printTable は、maxBytes / maxRows / maxLines を超えないように表をページ分割して出力する。
 // 2 ページ目以降もヘッダーを付け、各ページは必ず完結した表になる。
-func printTable(t tableData, maxBytes int64, maxLines int, pageBreak string) {
+func printTable(t tableData, maxBytes int64, maxRows, maxLines int, pageBreak string) {
 	// 各ユニットは「データ行＋行間罫線」で構成されるとみなす。
 	// 最終ユニットの罫線だけ下罫線文字に差し替える（長さは同一なのでバイト数に影響しない）。
 	// inlineBorder が空でも borderLast は表示するため、サイズ計算用の罫線は fallback する。
@@ -595,7 +617,7 @@ func printTable(t tableData, maxBytes int64, maxLines int, pageBreak string) {
 	units := make([]sizedUnit, 0, len(t.units))
 	for _, u := range t.units {
 		size := unitBytes(u, withBorder, borderForSizing)
-		units = append(units, sizedUnit{lines: u, size: size})
+		units = append(units, sizedUnit{lines: u, size: size, lineCount: len(u)})
 	}
 
 	// 固定コストの計算
@@ -612,7 +634,7 @@ func printTable(t tableData, maxBytes int64, maxLines int, pageBreak string) {
 	reserve := pageBreakBytes(pageBreak, 1, 1) // 初期概算
 	var pages []page
 	for attempt := 0; attempt < 3; attempt++ {
-		pages = paginate(units, hSize, fenceCost, maxBytes, reserve, maxLines)
+		pages = paginate(t, units, hSize, fenceCost, maxBytes, reserve, maxRows, maxLines)
 		if len(pages) <= 1 {
 			break
 		}
@@ -660,12 +682,13 @@ func printTable(t tableData, maxBytes int64, maxLines int, pageBreak string) {
 	}
 }
 
-// paginate は、maxBytes または maxLines を超えないようにデータユニットをページへ割り振る。
+// paginate は、maxBytes / maxRows / maxLines を超えないようにデータユニットをページへ割り振る。
 // reserve はページ区切り行 1 行分の見込みバイト数。
-func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxLines int) []page {
+// maxRows はヘッダー行を含む論理行数、maxLines はヘッダー・罫線も含む実際の表示行数を制限する。
+func paginate(t tableData, units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxRows, maxLines int) []page {
 	var pages []page
 
-	if maxBytes <= 0 && maxLines <= 0 {
+	if maxBytes <= 0 && maxRows <= 0 && maxLines <= 0 {
 		// 制限なし: 1 ページに全部
 		p := page{}
 		for i := range units {
@@ -675,14 +698,33 @@ func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxL
 		return pages
 	}
 
+	// 表示行数の固定コストを計算する
+	headerRows := 1
+	headerLines := len(t.headerLines)
+	inlineBorderLines := 0
+	if t.inlineBorder != "" {
+		inlineBorderLines = 1
+	}
+	bottomBorderLines := 0
+	if t.borderLast != "" {
+		bottomBorderLines = 1
+	}
+	codeBlockFences := 0
+	if t.codeBlock {
+		codeBlockFences = 2
+	}
+	fixedLines := headerLines + codeBlockFences + bottomBorderLines
+
 	var cur []int // 現在のページに割り当てたユニットのインデックス
 	var curSize int64
-	var curLines int
+	var curRows int
+	var curLines int // 現在のページのデータ行＋内部罫線の合計
 	flush := func() {
 		if len(cur) > 0 {
 			pages = append(pages, page{unitIdx: cur})
 			cur = nil
 			curSize = 0
+			curRows = 0
 			curLines = 0
 		}
 	}
@@ -706,9 +748,22 @@ func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxL
 			}
 		}
 
-		// maxLines 制限がある場合
-		if maxLines > 0 && curLines >= maxLines && len(cur) > 0 {
+		// maxRows 制限がある場合（ヘッダー行を含む論理行数）
+		if maxRows > 0 && headerRows+curRows+1 > maxRows && len(cur) > 0 {
 			needFlush = true
+		}
+
+		// maxLines 制限がある場合（ヘッダー・罫線を含む表示行数）
+		if maxLines > 0 {
+			projectedUnits := len(cur) + 1
+			projectedLines := curLines + u.lineCount + inlineBorderLines
+			actualProjected := fixedLines + projectedLines
+			if projectedUnits > 0 && inlineBorderLines > 0 {
+				actualProjected -= inlineBorderLines // 最終ユニットの内部罫線は下罫線に置き換わるため
+			}
+			if actualProjected > maxLines && len(cur) > 0 {
+				needFlush = true
+			}
 		}
 
 		if needFlush {
@@ -717,7 +772,8 @@ func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxL
 
 		cur = append(cur, i)
 		curSize += u.size
-		curLines++
+		curRows++
+		curLines += u.lineCount + inlineBorderLines
 
 		// ヘッダー＋1 ユニットすら入らない場合は、1 ユニットでページを強制成立させる
 		if maxBytes > 0 {
@@ -727,8 +783,19 @@ func paginate(units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxL
 			}
 		}
 
-		if maxLines > 0 && curLines >= maxLines {
+		if maxRows > 0 && headerRows+curRows >= maxRows {
 			flush()
+		}
+
+		if maxLines > 0 {
+			k := len(cur)
+			actualCurrent := fixedLines + curLines
+			if k > 0 && inlineBorderLines > 0 {
+				actualCurrent -= inlineBorderLines
+			}
+			if actualCurrent >= maxLines {
+				flush()
+			}
 		}
 	}
 	flush()

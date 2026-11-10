@@ -80,12 +80,15 @@ cat data.csv | ./c2tgo -o md
 | `--table-max-width`, `-w` | Maximum display width of a single `text` table row. Behaves like `--auto-fit` but uses the given width instead of the terminal width. Mutually exclusive with `--auto-fit`. Ignores `--cell-max-width`. | `0` |
 | `--md-code-block` | Wrap each Markdown cell content in code blocks. | `false` |
 | `--table-max-byte` | Maximum byte size per page of table output. `0` for unlimited. | `0` |
-| `--table-max-line` | Maximum number of data rows (excluding header/borders) per page. `0` for unlimited. | `0` |
+| `--table-max-rows`, `-R` | Maximum number of rows per page, including the header row. Borders are not counted. `0` for unlimited. | `0` |
+| `--table-max-lines`, `-L` | Maximum number of displayed lines per page, including the header, borders, and newlines inside cells. `0` for unlimited. | `0` |
 | `--page-break` | Page separator template. Use `%page` and `%total` as placeholders. Empty string disables the separator. | `<!-- page %page/%total -->` |
 | `--sort` | Sort data rows by 1-based column number. `0` disables sorting. | `0` |
 | `--reverse`, `-r` | Reverse the sort order when `--sort` is specified. | `false` |
 | `--header` | CSV string to use as the table header. When set, the first row of input data is treated as data, not header. | `""` |
 | `--file`, `-f` | Path to a CSV file to read instead of stdin. | `""` |
+
+> **Note:** `--table-max-line` is deprecated and is now an alias for `--table-max-rows`.
 
 ## Formatting Details
 

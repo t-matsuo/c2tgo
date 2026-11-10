@@ -437,6 +437,109 @@ func TestTableMaxWidthIgnoresCellMaxWidth(t *testing.T) {
 	}
 }
 
+func TestTableMaxRowsCountsHeader(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,City\nAlice,Tokyo\nBob,Kyoto\nKen,Nagoya\n"
+	// --table-max-rows はヘッダー行もカウントするため、3 で「ヘッダー＋データ2行」まで
+	stdout := run(t, bin, input, "--output=text", "--table-max-rows=3")
+	pages := strings.Split(stdout, "<!-- page ")
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages (header counted), got %d\n%s", len(pages), stdout)
+	}
+	// 4 であればヘッダー＋データ3行で 1 ページに収まる
+	stdout = run(t, bin, input, "--output=text", "--table-max-rows=4")
+	pages = strings.Split(stdout, "<!-- page ")
+	if len(pages) != 1 {
+		t.Fatalf("expected 1 page with maxRows=4, got %d\n%s", len(pages), stdout)
+	}
+}
+
+func TestTableMaxRowsShorthand(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,City\nAlice,Tokyo\nBob,Kyoto\nKen,Nagoya\n"
+	stdout := run(t, bin, input, "--output=text", "-R", "3")
+	pages := strings.Split(stdout, "<!-- page ")
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages with -R, got %d\n%s", len(pages), stdout)
+	}
+}
+
+func TestTableMaxLinesCountsHeaderAndBorders(t *testing.T) {
+	bin := buildBinary(t)
+	// Alice が 2 行、Bob が 1 行の表示データ行を持つ
+	// text テーブル全体ではヘッダー3行 + Alice2行 + 内部罫線1行 + Bob1行 + 下罫線1行 = 8行
+	input := "Name,City\nAlice,\"Tokyo\nOsaka\"\nBob,Kyoto\n"
+	stdout := run(t, bin, input, "--output=text", "--table-max-lines=8")
+	pages := strings.Split(stdout, "<!-- page ")
+	if len(pages) != 1 {
+		t.Fatalf("expected 1 page with maxLines=8, got %d\n%s", len(pages), stdout)
+	}
+	stdout = run(t, bin, input, "--output=text", "--table-max-lines=7")
+	pages = strings.Split(stdout, "<!-- page ")
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages with maxLines=7, got %d\n%s", len(pages), stdout)
+	}
+}
+
+func TestTableMaxLinesShorthand(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,City\nAlice,\"Tokyo\nOsaka\"\nBob,Kyoto\n"
+	stdout := run(t, bin, input, "--output=text", "-L", "7")
+	pages := strings.Split(stdout, "<!-- page ")
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages with -L, got %d\n%s", len(pages), stdout)
+	}
+}
+
+func TestTableMaxLineDeprecatedAlias(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,City\nAlice,Tokyo\nBob,Kyoto\nKen,Nagoya\n"
+	stdout := run(t, bin, input, "--output=text", "--table-max-line=3")
+	pages := strings.Split(stdout, "<!-- page ")
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages with deprecated --table-max-line, got %d\n%s", len(pages), stdout)
+	}
+}
+
+func TestTableMaxLineAndRowsMutualExclusive(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "--output=text", "--table-max-line=1", "--table-max-rows=1")
+	cmd.Stdin = strings.NewReader("Name,City\nAlice,Tokyo\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error when --table-max-line and --table-max-rows are used together")
+	}
+	if !strings.Contains(string(out), "deprecated") && !strings.Contains(string(out), "cannot be used") {
+		t.Errorf("unexpected error message: %s", out)
+	}
+}
+
+func TestTableMaxRowsNegative(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "--output=text", "--table-max-rows=-1")
+	cmd.Stdin = strings.NewReader("Name,City\nAlice,Tokyo\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error for negative --table-max-rows")
+	}
+	if !strings.Contains(string(out), "--table-max-rows") {
+		t.Errorf("unexpected error message: %s", out)
+	}
+}
+
+func TestTableMaxLinesNegative(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "--output=text", "--table-max-lines=-1")
+	cmd.Stdin = strings.NewReader("Name,City\nAlice,Tokyo\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error for negative --table-max-lines")
+	}
+	if !strings.Contains(string(out), "--table-max-lines") {
+		t.Errorf("unexpected error message: %s", out)
+	}
+}
+
 // TestMain は go test 時にテストバイナリのエントリポイントとして機能する。
 func TestMain(m *testing.M) {
 	fmt.Println("running tests...")
