@@ -514,6 +514,19 @@ func TestTableMaxLineAndRowsMutualExclusive(t *testing.T) {
 	}
 }
 
+func TestTableMaxRowsTooSmall(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "--output=text", "--table-max-rows=1")
+	cmd.Stdin = strings.NewReader("Name,City\nAlice,Tokyo\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error for too small --table-max-rows")
+	}
+	if !strings.Contains(string(out), "at least 2") {
+		t.Errorf("unexpected error message: %s", out)
+	}
+}
+
 func TestTableMaxRowsNegative(t *testing.T) {
 	bin := buildBinary(t)
 	cmd := exec.Command(bin, "--output=text", "--table-max-rows=-1")
@@ -523,6 +536,20 @@ func TestTableMaxRowsNegative(t *testing.T) {
 		t.Fatalf("expected error for negative --table-max-rows")
 	}
 	if !strings.Contains(string(out), "--table-max-rows") {
+		t.Errorf("unexpected error message: %s", out)
+	}
+}
+
+func TestTableMaxLinesTooSmall(t *testing.T) {
+	bin := buildBinary(t)
+	// text 出力の最低必要行数はヘッダー3 + 下罫線1 + データ1 = 5
+	cmd := exec.Command(bin, "--output=text", "--table-max-lines=4")
+	cmd.Stdin = strings.NewReader("Name,City\nAlice,Tokyo\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error for too small --table-max-lines")
+	}
+	if !strings.Contains(string(out), "at least 5") {
 		t.Errorf("unexpected error message: %s", out)
 	}
 }

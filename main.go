@@ -146,6 +146,12 @@ func main() {
 		effectiveTableMaxRows = *tableMaxLine
 	}
 
+	// --table-max-rows はヘッダー＋1データ行を確保できる値が必要
+	if effectiveTableMaxRows > 0 && effectiveTableMaxRows < 2 {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-rows/--table-max-line must be at least 2 (header + 1 data row)")
+		os.Exit(1)
+	}
+
 	// --table-max-width の検証
 	if *tableMaxWidth < 0 {
 		fmt.Fprintln(os.Stderr, "Error: --table-max-width must be >= 0 (0 for unlimited)")
@@ -627,6 +633,38 @@ func printTable(t tableData, maxBytes int64, maxRows, maxLines int, pageBreak st
 	}
 	hSize := headerBytes(t)
 
+	// 表示行数の固定コストを計算する
+	headerLines := len(t.headerLines)
+	bottomBorderLines := 0
+	if t.borderLast != "" {
+		bottomBorderLines = 1
+	}
+	codeBlockFences := 0
+	if t.codeBlock {
+		codeBlockFences = 2
+	}
+	fixedLines := headerLines + bottomBorderLines + codeBlockFences
+
+	// 最小のデータユニットの表示行数を求める
+	minDataLines := 0
+	for _, u := range units {
+		if minDataLines == 0 || u.lineCount < minDataLines {
+			minDataLines = u.lineCount
+		}
+	}
+
+	// --table-max-lines がヘッダー＋1データ行を表示できる値か検証
+	if maxLines > 0 {
+		minRequired := fixedLines
+		if minDataLines > 0 {
+			minRequired += minDataLines
+		}
+		if maxLines < minRequired {
+			fmt.Fprintf(os.Stderr, "Error: --table-max-lines must be at least %d to hold the table header and one data row\n", minRequired)
+			os.Exit(1)
+		}
+	}
+
 	// ページ区切り行のバイト数は総ページ数（%total の桁数など）に依存し、
 	// 総ページ数は区切りのバイト数にも依存する（循環参照）。
 	// そのため、まず概算値でページング → 確定した総ページ数から実際の区切りサイズを
@@ -634,7 +672,7 @@ func printTable(t tableData, maxBytes int64, maxRows, maxLines int, pageBreak st
 	reserve := pageBreakBytes(pageBreak, 1, 1) // 初期概算
 	var pages []page
 	for attempt := 0; attempt < 3; attempt++ {
-		pages = paginate(t, units, hSize, fenceCost, maxBytes, reserve, maxRows, maxLines)
+		pages = paginate(t, units, hSize, fenceCost, maxBytes, reserve, maxRows, maxLines, fixedLines)
 		if len(pages) <= 1 {
 			break
 		}
@@ -685,7 +723,7 @@ func printTable(t tableData, maxBytes int64, maxRows, maxLines int, pageBreak st
 // paginate は、maxBytes / maxRows / maxLines を超えないようにデータユニットをページへ割り振る。
 // reserve はページ区切り行 1 行分の見込みバイト数。
 // maxRows はヘッダー行を含む論理行数、maxLines はヘッダー・罫線も含む実際の表示行数を制限する。
-func paginate(t tableData, units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxRows, maxLines int) []page {
+func paginate(t tableData, units []sizedUnit, hSize, fenceCost, maxBytes, reserve int64, maxRows, maxLines, fixedLines int) []page {
 	var pages []page
 
 	if maxBytes <= 0 && maxRows <= 0 && maxLines <= 0 {
@@ -698,22 +736,12 @@ func paginate(t tableData, units []sizedUnit, hSize, fenceCost, maxBytes, reserv
 		return pages
 	}
 
-	// 表示行数の固定コストを計算する
+	// 表示行数関連のコストを計算する
 	headerRows := 1
-	headerLines := len(t.headerLines)
 	inlineBorderLines := 0
 	if t.inlineBorder != "" {
 		inlineBorderLines = 1
 	}
-	bottomBorderLines := 0
-	if t.borderLast != "" {
-		bottomBorderLines = 1
-	}
-	codeBlockFences := 0
-	if t.codeBlock {
-		codeBlockFences = 2
-	}
-	fixedLines := headerLines + codeBlockFences + bottomBorderLines
 
 	var cur []int // 現在のページに割り当てたユニットのインデックス
 	var curSize int64
