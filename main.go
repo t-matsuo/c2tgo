@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,10 @@ import (
 // version はビルド時に ldflags で設定される。
 // 例: go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)"
 var version string
+
+// commit はビルド時に ldflags で設定される。
+// 例: go build -ldflags "-X main.commit=$(git rev-parse HEAD)"
+var commit string
 
 // tableData は「完成した1つの表」を構成パーツに分解して保持する。
 // headerLines : 各ページの先頭に必ず付く行
@@ -49,6 +54,7 @@ type sizedUnit struct {
 func main() {
 	// コマンドライン引数の定義
 	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.BoolVar(showVersion, "V", false, "print version and exit (shorthand)")
 	lbReplacer := flag.String("line-break", "", "string to replace newlines inside CSV cells. default is <br> for md and no conversion for text")
 	topBorder := flag.String("top-border", "-", "single char for top border line (text only)")
 	bottomBorder := flag.String("bottom-border", "-", "single char for bottom border line (text only)")
@@ -61,6 +67,8 @@ func main() {
 	cellMaxWidth := flag.String("cell-max-width", "0", "maximum display width per cell row. single value applies to all columns, or comma-separated list per column (e.g. 5,6,7). 0 for unlimited, minimum 3")
 	autoFit := flag.Bool("auto-fit", false, "auto-fit text table width to terminal (text only). ignores --cell-max-width")
 	flag.BoolVar(autoFit, "a", false, "auto-fit text table width to terminal (text only, shorthand)")
+	tableMaxWidth := flag.Int("table-max-width", 0, "maximum display width of a single text table row. behaves like --auto-fit but uses the given width instead of the terminal width. ignores --cell-max-width (text only)")
+	flag.IntVar(tableMaxWidth, "w", 0, "maximum display width of a single text table row (shorthand)")
 	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
 	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
 	tableMaxLine := flag.Int("table-max-line", 0, "maximum number of data rows (excluding header/borders) per page (0 for unlimited)")
@@ -68,9 +76,21 @@ func main() {
 	output := flag.String("output", "text", "output format: md or text")
 	flag.StringVar(output, "o", "text", "output format: md or text (shorthand)")
 	sortCol := flag.Int("sort", 0, "sort data rows by 1-based column number (0 to disable)")
+	reverseSort := flag.Bool("reverse", false, "reverse the sort order (used with --sort)")
+	flag.BoolVar(reverseSort, "r", false, "reverse the sort order (shorthand)")
 	header := flag.String("header", "", "CSV string to use as table header. when set, the first row of input data is treated as data, not header")
 	filePath := flag.String("file", "", "path to CSV file (default: read from stdin)")
 	flag.StringVar(filePath, "f", "", "path to CSV file (shorthand)")
+
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "A command-line tool that takes CSV data from standard input or a file and formats it into a beautiful table for different platforms, including Markdown, ASCII text table.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Find more information at: https://github.com/t-matsuo/c2tgo")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+
 	flag.Parse()
 
 	if *showVersion {
@@ -78,7 +98,13 @@ func main() {
 		if v == "" {
 			v = "dev"
 		}
-		fmt.Println(v)
+		rev := commit
+		if rev == "" {
+			rev = "unknown"
+		} else if len(rev) > 7 {
+			rev = rev[:7]
+		}
+		fmt.Printf("Version: %s\nRevision: %s\nOS: %s\nArch: %s\n", v, rev, runtime.GOOS, runtime.GOARCH)
 		return
 	}
 
@@ -95,6 +121,16 @@ func main() {
 	// --table-max-line の検証
 	if *tableMaxLine < 0 {
 		fmt.Fprintln(os.Stderr, "Error: --table-max-line must be >= 0 (0 for unlimited)")
+		os.Exit(1)
+	}
+
+	// --table-max-width の検証
+	if *tableMaxWidth < 0 {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-width must be >= 0 (0 for unlimited)")
+		os.Exit(1)
+	}
+	if *autoFit && *tableMaxWidth > 0 {
+		fmt.Fprintln(os.Stderr, "Error: --auto-fit and --table-max-width are mutually exclusive")
 		os.Exit(1)
 	}
 
@@ -178,6 +214,9 @@ func main() {
 		}
 		if len(rows) > 1 {
 			sort.SliceStable(rows[1:], func(i, j int) bool {
+				if *reverseSort {
+					return rows[1+i][idx] > rows[1+j][idx]
+				}
 				return rows[1+i][idx] < rows[1+j][idx]
 			})
 		}
@@ -198,11 +237,20 @@ func main() {
 		}
 	}
 
+	// text 出力の場合の幅合わせ対象値を決定する
+	// --auto-fit が指定されていればターミナル幅、--table-max-width が指定されていればその値を使用する
+	fitWidth := 0
+	if *autoFit {
+		fitWidth = getTerminalWidth()
+	} else if *tableMaxWidth > 0 {
+		fitWidth = *tableMaxWidth
+	}
+
 	switch outFormat {
 	case "text":
 		t := buildTextTable(rows, maxCols, cellMaxWidths,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
-			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak, *autoFit)
+			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak, *autoFit, fitWidth)
 		printTable(t, *tableMaxByte, *tableMaxLine, *pageBreak)
 	default: // md
 		t := buildMarkdownTable(rows, maxCols, lineBreak, cellMaxWidths, *mdCodeBlock)
@@ -317,7 +365,7 @@ func buildMarkdownTable(rows [][]string, maxCols int, lineBreak string, cellMaxW
 }
 
 // Text 形式の表データを組み立てる
-func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bottom, left, right, header, corner, inlineH, inlineV, lineBreak string, autoFit bool) tableData {
+func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bottom, left, right, header, corner, inlineH, inlineV, lineBreak string, autoFit bool, fitWidth int) tableData {
 	// 各セルを「論理行」に分解
 	// lineBreak が指定されていればセル内改行を置き換えて 1 行にまとめる。
 	// lineBreak が空なら元の改行で分割する。
@@ -352,8 +400,8 @@ func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bott
 
 	// 列幅を決定する
 	colWidths := make([]int, maxCols)
-	if autoFit {
-		colWidths = calculateAutoFitWidths(naturalWidths, maxCols, left, right, inlineV, corner)
+	if fitWidth > 0 {
+		colWidths = calculateAutoFitWidths(naturalWidths, maxCols, left, right, inlineV, corner, fitWidth, !autoFit)
 	} else {
 		// 各論理行に cellMaxWidth 制限を適用
 		for _, row := range cellLines {
@@ -406,22 +454,15 @@ func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bott
 	return t
 }
 
-// calculateAutoFitWidths はターミナル幅に収まるように列幅を計算する。
-// 自然幅の合計がターミナル幅に収まる場合は自然幅をそのまま使用する。
+// calculateAutoFitWidths は指定された幅に収まるように列幅を計算する。
+// 自然幅の合計が指定幅に収まる場合は自然幅をそのまま使用する。
 // 収まらない場合は、幅の広い列から優先的に縮小しつつ、各列が自然幅に対して
 // 極端に短くならないように最小幅を保証する。
-func calculateAutoFitWidths(natural []int, maxCols int, left, right, inlineV, corner string) []int {
-	terminalWidth := getTerminalWidth()
+func calculateAutoFitWidths(natural []int, maxCols int, left, right, inlineV, corner string, fitWidth int, enforceMin bool) []int {
 	overhead := tableOverhead(maxCols, left, right, inlineV, corner)
-	available := terminalWidth - overhead
+	available := fitWidth - overhead
 	if available < 0 {
 		available = 0
-	}
-
-	widths := append([]int(nil), natural...)
-	total := sumInts(widths)
-	if total <= available {
-		return widths
 	}
 
 	// 縮小が必要な場合、各列の最小幅を自然幅の 30% または 3 の大きい方で決定
@@ -432,6 +473,20 @@ func calculateAutoFitWidths(natural []int, maxCols int, left, right, inlineV, co
 			minW = 3
 		}
 		minWidths[c] = minW
+	}
+
+	// 指定幅が圧倒的に小さく、最小幅を保証できない場合はエラーにする
+	// （--auto-fit の場合はターミナル幅に合わせてオーバーフローさせるため、ここでは検証しない）
+	minRequired := overhead + sumInts(minWidths)
+	if enforceMin && fitWidth < minRequired {
+		fmt.Fprintf(os.Stderr, "Error: --table-max-width %d is too small to hold the table (minimum %d required)\n", fitWidth, minRequired)
+		os.Exit(1)
+	}
+
+	widths := append([]int(nil), natural...)
+	total := sumInts(widths)
+	if total <= available {
+		return widths
 	}
 
 	// 最も幅の広い列から優先的に 1 文字ずつ縮小する。

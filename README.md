@@ -21,10 +21,10 @@ To build the application, ensure you have Go installed and run:
 go build -o c2tgo .
 ```
 
-To embed the build date/time into `--version`, build with:
+To embed the build date/time and commit hash into `--version`, build with:
 
 ```bash
-go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)" -o c2tgo .
+go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S) -X main.commit=$(git rev-parse HEAD)" -o c2tgo .
 ```
 
 ## Usage
@@ -62,7 +62,7 @@ cat data.csv | ./c2tgo -o md
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--version` | Print the version number and exit. | - |
+| `--version`, `-V` | Print the version, revision, OS, and architecture, then exit. | - |
 | `--output`, `-o` | Output format: `md` or `text`. | `text` |
 | `--line-break` | String to replace newlines inside CSV cells. Default is `<br>` for `md` and no conversion for `text`. | `<br>` (`md` only) |
 | `--top-border` | Single character for top border line (text only). | `-` |
@@ -75,11 +75,13 @@ cat data.csv | ./c2tgo -o md
 | `--inline-v-border` | Single character for inline vertical borders (text only). | `\|` |
 | `--cell-max-width` | Maximum display width per cell row. A single value applies to all columns. A comma-separated list specifies width per column (e.g. `5,6,7`). Use `0` for unlimited per column. Minimum 3. | `0` |
 | `--auto-fit`, `-a` | Fit the `text` table width to the terminal width. Ignores `--cell-max-width`. | `false` |
+| `--table-max-width`, `-w` | Maximum display width of a single `text` table row. Behaves like `--auto-fit` but uses the given width instead of the terminal width. Mutually exclusive with `--auto-fit`. Ignores `--cell-max-width`. | `0` |
 | `--md-code-block` | Wrap each Markdown cell content in code blocks. | `false` |
 | `--table-max-byte` | Maximum byte size per page of table output. `0` for unlimited. | `0` |
 | `--table-max-line` | Maximum number of data rows (excluding header/borders) per page. `0` for unlimited. | `0` |
 | `--page-break` | Page separator template. Use `%page` and `%total` as placeholders. Empty string disables the separator. | `<!-- page %page/%total -->` |
 | `--sort` | Sort data rows by 1-based column number. `0` disables sorting. | `0` |
+| `--reverse`, `-r` | Reverse the sort order when `--sort` is specified. | `false` |
 | `--header` | CSV string to use as the table header. When set, the first row of input data is treated as data, not header. | `""` |
 | `--file`, `-f` | Path to a CSV file to read instead of stdin. | `""` |
 

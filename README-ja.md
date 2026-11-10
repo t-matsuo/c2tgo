@@ -21,10 +21,10 @@ CSVデータを標準入力またはファイルから受け取り、Markdown、
 go build -o c2tgo .
 ```
 
-ビルド日時を `--version` に埋め込む場合は、以下のようにビルドしてください：
+ビルド日時とコミットハッシュを `--version` に埋め込む場合は、以下のようにビルドしてください：
 
 ```bash
-go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S)" -o c2tgo .
+go build -ldflags "-X main.version=$(date +%Y%m%d-%H%M%S) -X main.commit=$(git rev-parse HEAD)" -o c2tgo .
 ```
 
 ## 使い方
@@ -62,7 +62,7 @@ cat data.csv | ./c2tgo -o md
 
 | フラグ | 説明 | デフォルト値 |
 |------|-------------|---------|
-| `--version` | バージョン番号を表示して終了します。 | - |
+| `--version`, `-V` | バージョン、リビジョン、OS、Arch を表示して終了します。 | - |
 | `--output`, `-o` | 出力形式：`md` または `text`。 | `text` |
 | `--line-break` | CSVセル内の改行を置き換える文字列。`md` のデフォルトは `<br>`、`text` のデフォルトは変換しない。 | `<br>`（`md` のみ） |
 | `--top-border` | `text` の上罫線に使用する1文字。 | `-` |
@@ -75,11 +75,13 @@ cat data.csv | ./c2tgo -o md
 | `--inline-v-border` | `text` の内部垂直罫線に使用する1文字。 | `\|` |
 | `--cell-max-width` | セル行あたりの最大表示幅。値が1つの場合は全列に適用。カンマ区切りで各列の幅を指定可能（例：`5,6,7`）。`0` は未制限を表す。最小値は3。 | `0` |
 | `--auto-fit`, `-a` | `text` 出力時にテーブル幅をターミナル幅に合わせる。`--cell-max-width` は無視される。 | `false` |
+| `--table-max-width`, `-w` | `text` の表1行あたりの最大表示幅。`--auto-fit` と同じ動作をしますが、ターミナル幅の代わりに指定した幅を使用します。`--auto-fit` と排他。`--cell-max-width` は無視される。 | `0` |
 | `--md-code-block` | Markdownの各セルの内容をコードブロックで囲む。 | `false` |
 | `--table-max-byte` | テーブル出力1ページあたりの最大バイトサイズ。`0` で無制限。 | `0` |
 | `--table-max-line` | 1ページあたりの最大データ行数（ヘッダー・罫線除く）。`0` で無制限。 | `0` |
 | `--page-break` | ページ区切り文字列テンプレート。`%page` をページ番号、`%total` を総ページ数に置き換える。空文字列で区切りを無効化。 | `<!-- page %page/%total -->` |
 | `--sort` | 1始まりの列番号でデータ行をソート。`0` でソート無効。 | `0` |
+| `--reverse`, `-r` | `--sort` 指定時にソート順を逆にする。 | `false` |
 | `--header` | テーブルヘッダーとして使用するCSV文字列。指定時、入力データの1行目はヘッダーではなくデータとして扱われる。 | `""` |
 | `--file`, `-f` | 標準入力の代わりに読み込むCSVファイルのパス。 | `""` |
 
