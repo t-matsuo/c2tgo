@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -52,55 +53,216 @@ type sizedUnit struct {
 	lineCount int
 }
 
+// cmdFlags は c2tgo のコマンドラインフラグを保持する FlagSet。
+// 登録順を維持することで、ヘルプ表示で関連オプションを近くに配置する。
+var cmdFlags *flag.FlagSet
+
+// flagOrder はフラグを登録した順序を保持する。
+// 標準の flag.FlagSet は登録順を保証しないため、ヘルプ出力時にこのスライスを使う。
+var flagOrder []string
+
+// printGroupedDefaults は、同じ変数に束縛されているフラグ（長い名前とショートハンド）を
+// 1 行にまとめてヘルプを出力する。標準の flag.PrintDefaults と同じ見た目になるよう
+// フォーマットする。
+func printGroupedDefaults() {
+	// Value が同一（同じポインタ変数に束縛されている）フラグをグループ化する。
+	groups := make(map[flag.Value][]*flag.Flag)
+	cmdFlags.VisitAll(func(f *flag.Flag) {
+		groups[f.Value] = append(groups[f.Value], f)
+	})
+
+	// 出力順は flagOrder（登録順）で最初に現れたフラグを代表とする。
+	seen := make(map[flag.Value]bool)
+	for _, name := range flagOrder {
+		rep := cmdFlags.Lookup(name)
+		if rep == nil || seen[rep.Value] {
+			continue
+		}
+		seen[rep.Value] = true
+		group := groups[rep.Value]
+
+		// 名前を長い順、同じ長さなら辞書順で並べる。
+		names := make([]string, len(group))
+		for i, f := range group {
+			names[i] = f.Name
+		}
+		sort.Slice(names, func(i, j int) bool {
+			if len(names[i]) != len(names[j]) {
+				return len(names[i]) > len(names[j])
+			}
+			return names[i] < names[j]
+		})
+
+		// 説明文はグループ内で最も長い名前のフラグ（通常は長い名前の本体）から選ぶ。
+		usage := pickUsage(group)
+
+		// パラメータ名と説明文を抽出。
+		tmp := &flag.Flag{Name: rep.Name, Usage: usage, Value: rep.Value, DefValue: rep.DefValue}
+		argName, usage := flag.UnquoteUsage(tmp)
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "  -%s", strings.Join(names, ", -"))
+		if len(argName) > 0 {
+			fmt.Fprintf(&b, " %s", argName)
+		}
+
+		// 名前が短い（1文字）場合は同じ行に説明を、長い場合は次の行に説明を書く。
+		if b.Len() <= 4 {
+			b.WriteString("\t")
+		} else {
+			b.WriteString("\n    \t")
+		}
+		b.WriteString(strings.ReplaceAll(usage, "\n", "\n    \t"))
+
+		// デフォルト値が型のゼロ値でなければ出力する。
+		if isZero, err := isZeroValue(rep, rep.DefValue); err == nil && !isZero {
+			if reflect.TypeOf(rep.Value).String() == "*flag.stringValue" {
+				fmt.Fprintf(&b, " (default %q)", rep.DefValue)
+			} else {
+				fmt.Fprintf(&b, " (default %v)", rep.DefValue)
+			}
+		}
+
+		fmt.Fprint(cmdFlags.Output(), b.String(), "\n")
+	}
+}
+
+// pickUsage はフラググループからヘルプに表示する説明文を選ぶ。
+// 最も名前が長いフラグ（通常は長い名前の本体）の説明文を採用し、
+// 念のため "(shorthand...)" マーカーが残っていれば取り除く。
+func pickUsage(group []*flag.Flag) string {
+	// 長い名前の方をメインの説明文として採用する（ショートハンドは 1 文字のため）。
+	var best *flag.Flag
+	for _, f := range group {
+		if best == nil || len(f.Name) > len(best.Name) || (len(f.Name) == len(best.Name) && f.Name < best.Name) {
+			best = f
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	u := best.Usage
+	// 念のため "(shorthand...)" マーカーが残っていれば取り除く。
+	if i := strings.Index(u, " (shorthand"); i >= 0 {
+		u = strings.TrimRight(u[:i], ", ")
+	}
+	return u
+}
+
+// isZeroValue は value がフラグ f の型のゼロ値の文字列表現かどうかを返す。
+// 標準パッケージの同名関数と同じ動作をする。
+func isZeroValue(f *flag.Flag, value string) (ok bool, err error) {
+	typ := reflect.TypeOf(f.Value)
+	var z reflect.Value
+	if typ.Kind() == reflect.Pointer {
+		z = reflect.New(typ.Elem())
+	} else {
+		z = reflect.Zero(typ)
+	}
+	defer func() {
+		if e := recover(); e != nil {
+			if typ.Kind() == reflect.Pointer {
+				typ = typ.Elem()
+			}
+			err = fmt.Errorf("panic calling String method on zero %v for flag %s: %v", typ, f.Name, e)
+		}
+	}()
+	return value == z.Interface().(flag.Value).String(), nil
+}
+
+// boolFlag は FlagSet に長い名前のフラグとショートハンドを同じ変数に束縛して登録する。
+// 説明文は重複させず、ヘルプ出力は printGroupedDefaults で 1 行にまとめる。
+func boolFlag(fs *flag.FlagSet, name, shorthand string, value bool, usage string) *bool {
+	p := fs.Bool(name, value, usage)
+	if shorthand != "" {
+		fs.BoolVar(p, shorthand, value, usage)
+	}
+	flagOrder = append(flagOrder, name)
+	return p
+}
+
+// stringFlag は boolFlag と同様に string 型のフラグとショートハンドを登録する。
+func stringFlag(fs *flag.FlagSet, name, shorthand string, value string, usage string) *string {
+	p := fs.String(name, value, usage)
+	if shorthand != "" {
+		fs.StringVar(p, shorthand, value, usage)
+	}
+	flagOrder = append(flagOrder, name)
+	return p
+}
+
+// intFlag は boolFlag と同様に int 型のフラグとショートハンドを登録する。
+func intFlag(fs *flag.FlagSet, name, shorthand string, value int, usage string) *int {
+	p := fs.Int(name, value, usage)
+	if shorthand != "" {
+		fs.IntVar(p, shorthand, value, usage)
+	}
+	flagOrder = append(flagOrder, name)
+	return p
+}
+
+// int64Flag は boolFlag と同様に int64 型のフラグを登録する（ショートハンド非対応）。
+func int64Flag(fs *flag.FlagSet, name string, value int64, usage string) *int64 {
+	p := fs.Int64(name, value, usage)
+	flagOrder = append(flagOrder, name)
+	return p
+}
+
 func main() {
 	// コマンドライン引数の定義
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.BoolVar(showVersion, "V", false, "print version and exit (shorthand)")
-	lbReplacer := flag.String("line-break", "", "string to replace newlines inside CSV cells. default is <br> for md and no conversion for text")
-	topBorder := flag.String("top-border", "-", "single char for top border line (text only)")
-	bottomBorder := flag.String("bottom-border", "-", "single char for bottom border line (text only)")
-	leftBorder := flag.String("left-border", "|", "single char for left border line (text only)")
-	rightBorder := flag.String("right-border", "|", "single char for right border line (text only)")
-	headerBorder := flag.String("header-border", "=", "single char for header/data separator line (text only)")
-	cornerChar := flag.String("corner-char", "+", "single char for corners and junction points (text only)")
-	inlineHBorder := flag.String("inline-h-border", "-", "single char for inline horizontal borders (text only). empty string disables inline borders")
-	inlineVBorder := flag.String("inline-v-border", "|", "single char for inline vertical borders (text only)")
-	cellMaxWidth := flag.String("cell-max-width", "0", "maximum display width per cell row. single value applies to all columns, or comma-separated list per column (e.g. 5,6,7). 0 for unlimited, minimum 3")
-	autoFit := flag.Bool("auto-fit", false, "auto-fit text table width to terminal (text only). ignores --cell-max-width")
-	flag.BoolVar(autoFit, "a", false, "auto-fit text table width to terminal (text only, shorthand)")
-	tableMaxWidth := flag.Int("table-max-width", 0, "maximum display width of a single text table row. behaves like --auto-fit but uses the given width instead of the terminal width. ignores --cell-max-width (text only)")
-	flag.IntVar(tableMaxWidth, "w", 0, "maximum display width of a single text table row (shorthand)")
-	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
-	mdAlignBorder := flag.Bool("md-align-border", false, "align Markdown table vertical borders per column")
-	minimal := flag.Bool("minimal", false, "omit top, bottom, and inline horizontal borders in text output")
-	flag.BoolVar(minimal, "m", false, "minimal text table (shorthand)")
-	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
-	tableMaxRows := flag.Int("table-max-rows", 0, "maximum number of data rows per page (0 for unlimited)")
-	flag.IntVar(tableMaxRows, "R", 0, "maximum number of data rows per page (shorthand)")
-	tableMaxLines := flag.Int("table-max-lines", 0, "maximum number of displayed data lines per page, accounting for newlines inside cells (0 for unlimited)")
-	flag.IntVar(tableMaxLines, "L", 0, "maximum number of displayed data lines per page (shorthand)")
-	// --table-max-line は --table-max-rows の下位互換エイリアス（非推奨）
-	tableMaxLine := flag.Int("table-max-line", 0, "deprecated: use --table-max-rows")
-	pageBreak := flag.String("page-break", "<!-- page %page/%total -->", "page separator template between pages. use %page and %total as placeholders. empty string disables separator")
-	output := flag.String("output", "text", "output format: md or text")
-	flag.StringVar(output, "o", "text", "output format: md or text (shorthand)")
-	sortCol := flag.Int("sort", 0, "sort data rows by 1-based column number (0 to disable)")
-	reverseSort := flag.Bool("reverse", false, "reverse the sort order (used with --sort)")
-	flag.BoolVar(reverseSort, "r", false, "reverse the sort order (shorthand)")
-	header := flag.String("header", "", "CSV string to use as table header. when set, the first row of input data is treated as data, not header")
-	filePath := flag.String("file", "", "path to CSV file (default: read from stdin)")
-	flag.StringVar(filePath, "f", "", "path to CSV file (shorthand)")
+	// 専用の FlagSet を使うことで、登録順を維持し、ヘルプで関連オプションを近くに表示する。
+	cmdFlags = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	cmdFlags.SetOutput(os.Stderr)
 
-	flag.Usage = func() {
+	// --- 入出力・基本制御 ---
+	filePath := stringFlag(cmdFlags, "file", "f", "", "path to CSV file (default: read from stdin)")
+	output := stringFlag(cmdFlags, "output", "o", "text", "output format: md or text")
+	header := stringFlag(cmdFlags, "header", "", "", "CSV string to use as table header. when set, the first row of input data is treated as data, not header")
+	sortCol := intFlag(cmdFlags, "sort", "", 0, "sort data rows by 1-based column number (0 to disable)")
+	reverseSort := boolFlag(cmdFlags, "reverse", "r", false, "reverse the sort order (used with --sort)")
+
+	// --- テーブルサイズ・区切り ---
+	pageBreak := stringFlag(cmdFlags, "page-break", "", "<!-- page %page/%total -->", "page separator template between pages. use %page and %total as placeholders. empty string disables separator")
+	tableMaxWidth := intFlag(cmdFlags, "table-max-width", "w", 0, "maximum display width of a single text table row. behaves like --auto-fit but uses the given width instead of the terminal width. ignores --cell-max-width (text only)")
+	tableMaxRows := intFlag(cmdFlags, "table-max-rows", "R", 0, "maximum number of data rows per page (0 for unlimited)")
+	tableMaxLines := intFlag(cmdFlags, "table-max-lines", "L", 0, "maximum number of displayed data lines per page, accounting for newlines inside cells (0 for unlimited)")
+	tableMaxByte := int64Flag(cmdFlags, "table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
+
+	// --- セル・幅制御 ---
+	cellMaxWidth := stringFlag(cmdFlags, "cell-max-width", "", "0", "maximum display width per cell row. single value applies to all columns, or comma-separated list per column (e.g. 5,6,7). 0 for unlimited, minimum 3")
+	autoFit := boolFlag(cmdFlags, "auto-fit", "a", false, "auto-fit text table width to terminal (text only). ignores --cell-max-width")
+
+	// --- Markdown 関連 ---
+	mdCodeBlock := boolFlag(cmdFlags, "md-code-block", "", false, "wrap each MD cell content in code blocks")
+	mdAlignBorder := boolFlag(cmdFlags, "md-align-border", "", false, "align Markdown table vertical borders per column")
+
+	// --- 改行処理 ---
+	lbReplacer := stringFlag(cmdFlags, "line-break", "", "", "string to replace newlines inside CSV cells. default is <br> for md and no conversion for text")
+
+	// --- テキストテーブル外枠 ---
+	topBorder := stringFlag(cmdFlags, "top-border", "", "-", "single char for top border line (text only)")
+	bottomBorder := stringFlag(cmdFlags, "bottom-border", "", "-", "single char for bottom border line (text only)")
+	leftBorder := stringFlag(cmdFlags, "left-border", "", "|", "single char for left border line (text only)")
+	rightBorder := stringFlag(cmdFlags, "right-border", "", "|", "single char for right border line (text only)")
+	headerBorder := stringFlag(cmdFlags, "header-border", "", "=", "single char for header/data separator line (text only)")
+	inlineHBorder := stringFlag(cmdFlags, "inline-h-border", "", "-", "single char for inline horizontal borders (text only). empty string disables inline borders")
+	inlineVBorder := stringFlag(cmdFlags, "inline-v-border", "", "|", "single char for inline vertical borders (text only)")
+	cornerChar := stringFlag(cmdFlags, "corner-char", "", "+", "single char for corners and junction points (text only)")
+	minimal := boolFlag(cmdFlags, "minimal", "m", false, "omit top, bottom, and inline horizontal borders in text output")
+
+	// --- その他 ---
+	showVersion := boolFlag(cmdFlags, "version", "V", false, "print version and exit")
+
+	cmdFlags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "A command-line tool that takes CSV data from standard input or a file and formats it into a beautiful table for different platforms, including Markdown, ASCII text table.")
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Find more information at: https://github.com/t-matsuo/c2tgo")
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		flag.PrintDefaults()
+		printGroupedDefaults()
 	}
 
-	flag.Parse()
+	cmdFlags.Parse(os.Args[1:])
 
 	if *showVersion {
 		v := version
@@ -140,11 +302,6 @@ func main() {
 	checkSingleCharOrEmpty("--inline-h-border", *inlineHBorder)
 	checkSingleChar("--inline-v-border", *inlineVBorder)
 
-	// --table-max-line は --table-max-rows の非推奨エイリアス
-	if *tableMaxLine < 0 {
-		fmt.Fprintln(os.Stderr, "Error: --table-max-line must be >= 0 (0 for unlimited)")
-		os.Exit(1)
-	}
 	if *tableMaxRows < 0 {
 		fmt.Fprintln(os.Stderr, "Error: --table-max-rows must be >= 0 (0 for unlimited)")
 		os.Exit(1)
@@ -153,18 +310,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error: --table-max-lines must be >= 0 (0 for unlimited)")
 		os.Exit(1)
 	}
-	if isFlagSet("table-max-line") && isFlagSet("table-max-rows") {
-		fmt.Fprintln(os.Stderr, "Error: --table-max-line is deprecated and cannot be used with --table-max-rows")
-		os.Exit(1)
-	}
-	effectiveTableMaxRows := *tableMaxRows
-	if isFlagSet("table-max-line") {
-		effectiveTableMaxRows = *tableMaxLine
-	}
 
 	// --table-max-rows はヘッダー＋1データ行を確保できる値が必要
-	if effectiveTableMaxRows > 0 && effectiveTableMaxRows < 2 {
-		fmt.Fprintln(os.Stderr, "Error: --table-max-rows/--table-max-line must be at least 2 (header + 1 data row)")
+	if *tableMaxRows > 0 && *tableMaxRows < 2 {
+		fmt.Fprintln(os.Stderr, "Error: --table-max-rows must be at least 2 (header + 1 data row)")
 		os.Exit(1)
 	}
 
@@ -295,17 +444,17 @@ func main() {
 		t := buildTextTable(rows, maxCols, cellMaxWidths,
 			*topBorder, *bottomBorder, *leftBorder, *rightBorder, *headerBorder,
 			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak, *autoFit, fitWidth)
-		printTable(t, *tableMaxByte, effectiveTableMaxRows, *tableMaxLines, *pageBreak)
+		printTable(t, *tableMaxByte, *tableMaxRows, *tableMaxLines, *pageBreak)
 	default: // md
 		t := buildMarkdownTable(rows, maxCols, lineBreak, cellMaxWidths, *mdCodeBlock, *mdAlignBorder)
-		printTable(t, *tableMaxByte, effectiveTableMaxRows, *tableMaxLines, *pageBreak)
+		printTable(t, *tableMaxByte, *tableMaxRows, *tableMaxLines, *pageBreak)
 	}
 }
 
 // isFlagSet は指定した名前のコマンドライン引数が明示的に渡されたかを返す。
 func isFlagSet(name string) bool {
 	set := false
-	flag.Visit(func(f *flag.Flag) {
+	cmdFlags.Visit(func(f *flag.Flag) {
 		if f.Name == name {
 			set = true
 		}

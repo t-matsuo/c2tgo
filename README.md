@@ -90,8 +90,6 @@ cat data.csv | ./c2tgo -o md
 | `--header` | CSV string to use as the table header. When set, the first row of input data is treated as data, not header. | `""` |
 | `--file`, `-f` | Path to a CSV file to read instead of stdin. | `""` |
 
-> **Note:** `--table-max-line` is deprecated and is now an alias for `--table-max-rows`.
-
 ## Formatting Details
 
 - **md**: Standard Markdown table. Supports `<br>` for multi-line content within cells.

@@ -379,6 +379,29 @@ func TestVersionShorthandV(t *testing.T) {
 	}
 }
 
+func TestHelpGroupsAliases(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "-h")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("-h failed: %v\n%s", err, out)
+	}
+	help := string(out)
+
+	// 同じ変数に束縛された長い名前とショートハンドが 1 行にまとまっている。
+	if !strings.Contains(help, "-version, -V") {
+		t.Errorf("expected -version and -V to be grouped on one line\n%s", help)
+	}
+	if !strings.Contains(help, "-output, -o") {
+		t.Errorf("expected -output and -o to be grouped on one line\n%s", help)
+	}
+
+	// ショートハンド専用の重複した説明文がない。
+	if strings.Contains(help, "print version and exit (shorthand)") {
+		t.Errorf("expected shorthand-only description to be omitted\n%s", help)
+	}
+}
+
 func TestSortOutOfRange(t *testing.T) {
 	bin := buildBinary(t)
 	input := "Name,Age\nAlice,30\n"
@@ -620,29 +643,6 @@ func TestTableMaxLinesShorthand(t *testing.T) {
 	pages := strings.Split(stdout, "<!-- page ")
 	if len(pages) != 2 {
 		t.Fatalf("expected 2 pages with -L, got %d\n%s", len(pages), stdout)
-	}
-}
-
-func TestTableMaxLineDeprecatedAlias(t *testing.T) {
-	bin := buildBinary(t)
-	input := "Name,City\nAlice,Tokyo\nBob,Kyoto\nKen,Nagoya\n"
-	stdout := run(t, bin, input, "--output=text", "--table-max-line=3")
-	pages := strings.Split(stdout, "<!-- page ")
-	if len(pages) != 2 {
-		t.Fatalf("expected 2 pages with deprecated --table-max-line, got %d\n%s", len(pages), stdout)
-	}
-}
-
-func TestTableMaxLineAndRowsMutualExclusive(t *testing.T) {
-	bin := buildBinary(t)
-	cmd := exec.Command(bin, "--output=text", "--table-max-line=1", "--table-max-rows=1")
-	cmd.Stdin = strings.NewReader("Name,City\nAlice,Tokyo\n")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected error when --table-max-line and --table-max-rows are used together")
-	}
-	if !strings.Contains(string(out), "deprecated") && !strings.Contains(string(out), "cannot be used") {
-		t.Errorf("unexpected error message: %s", out)
 	}
 }
 
