@@ -66,15 +66,17 @@ cat data.csv | ./c2tgo -o md
 |------|-------------|---------|
 | `--version`, `-V` | Print the version, revision, OS, and architecture, then exit. | - |
 | `--output`, `-o` | Output format: `md` or `text`. | `text` |
-| `--line-break` | String to replace newlines inside CSV cells. Default is `<br>` for `md` and no conversion for `text`. | `<br>` (`md` only) |
-| `--top-border` | Single character for top border line (text only). | `-` |
-| `--bottom-border` | Single character for bottom border line (text only). | `-` |
+| `--line-break` | String to replace newlines inside CSV cells. Default is `<br>` for `md` and no conversion for `text`. For `md`, an empty value emits newlines as additional rows instead of replacing them. | `<br>` (`md` only) |
+| `--top-border` | Single character for top border line (text only). Empty string hides the top border. | `-` |
+| `--bottom-border` | Single character for bottom border line (text only). Empty string hides the bottom border. | `-` |
 | `--left-border` | Single character for left border line (text only). | `\|` |
 | `--right-border` | Single character for right border line (text only). | `\|` |
 | `--header-border` | Single character for header/data separator line (text only). | `=` |
 | `--corner-char` | Single character for corners and junction points (text only). | `+` |
 | `--inline-h-border` | Single character for inline horizontal borders (text only). Empty string disables inline horizontal borders. | `-` |
 | `--inline-v-border` | Single character for inline vertical borders (text only). | `\|` |
+| `--minimal`, `-m` | For `text` output, equivalent to setting `--top-border`, `--bottom-border`, and `--inline-h-border` to empty strings. | `false` |
+| `--md-align-border` | For `md` output, align the vertical border (`|`) positions per column. | `false` |
 | `--cell-max-width` | Maximum display width per cell row. A single value applies to all columns. A comma-separated list specifies width per column (e.g. `5,6,7`). Use `0` for unlimited per column. Minimum 3. | `0` |
 | `--auto-fit`, `-a` | Fit the `text` table width to the terminal width. Ignores `--cell-max-width`. | `false` |
 | `--table-max-width`, `-w` | Maximum display width of a single `text` table row. Behaves like `--auto-fit` but uses the given width instead of the terminal width. Mutually exclusive with `--auto-fit`. Ignores `--cell-max-width`. | `0` |

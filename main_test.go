@@ -191,6 +191,138 @@ func TestEmptyInlineHBorder(t *testing.T) {
 	}
 }
 
+func TestEmptyTopBottomBorder(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Age\nAlice,30\nBob,25\n"
+	stdout := run(t, bin, input, "--output=text", "--top-border=", "--bottom-border=")
+	want := []string{
+		"| Name  | Age |",
+		"+=======+=====+",
+		"| Alice | 30  |",
+		"+-------+-----+",
+		"| Bob   | 25  |",
+	}
+	got := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("unexpected line count: got %d, want %d\n%s", len(got), len(want), stdout)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d mismatch:\n got: %s\nwant: %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMinimalFlag(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Age\nAlice,30\nBob,25\n"
+	stdout := run(t, bin, input, "--output=text", "--minimal")
+	want := []string{
+		"| Name  | Age |",
+		"+=======+=====+",
+		"| Alice | 30  |",
+		"| Bob   | 25  |",
+	}
+	got := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("unexpected line count: got %d, want %d\n%s", len(got), len(want), stdout)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d mismatch:\n got: %s\nwant: %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMinimalShorthand(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Age\nAlice,30\nBob,25\n"
+	stdout := run(t, bin, input, "--output=text", "-m")
+	want := []string{
+		"| Name  | Age |",
+		"+=======+=====+",
+		"| Alice | 30  |",
+		"| Bob   | 25  |",
+	}
+	got := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("unexpected line count: got %d, want %d\n%s", len(got), len(want), stdout)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d mismatch:\n got: %s\nwant: %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMinimalRespectsExplicitTopBorder(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Age\nAlice,30\n"
+	stdout := run(t, bin, input, "--output=text", "--minimal", "--top-border", "^")
+	want := []string{
+		"+^^^^^^^+^^^^^+",
+		"| Name  | Age |",
+		"+=======+=====+",
+		"| Alice | 30  |",
+	}
+	got := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("unexpected line count: got %d, want %d\n%s", len(got), len(want), stdout)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d mismatch:\n got: %s\nwant: %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMarkdownAlignBorder(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Age,City\nAlice,30,Tokyo\n"
+	stdout := run(t, bin, input, "--output=md", "--md-align-border")
+	want := "| Name  | Age | City  |\n| ----- | --- | ----- |\n| Alice | 30  | Tokyo |\n"
+	if stdout != want {
+		t.Errorf("unexpected output:\n%s\nwant:\n%s", stdout, want)
+	}
+}
+
+func TestMarkdownLineBreakEmpty(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,City\nAlice,\"Tokyo\nOsaka\"\n"
+	stdout := run(t, bin, input, "--output=md", "--line-break=")
+	want := "| Name | City |\n| --- | --- |\n| Alice | Tokyo |\n|  | Osaka |\n"
+	if stdout != want {
+		t.Errorf("unexpected output:\n%s\nwant:\n%s", stdout, want)
+	}
+}
+
+func TestMarkdownAlignBorderWithEmptyLineBreak(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,City\nAlice,\"Tokyo\nOsaka\"\nBob,Kyoto\n"
+	stdout := run(t, bin, input, "--output=md", "--md-align-border", "--line-break=")
+	want := "| Name  | City  |\n| ----- | ----- |\n| Alice | Tokyo |\n|       | Osaka |\n| Bob   | Kyoto |\n"
+	if stdout != want {
+		t.Errorf("unexpected output:\n%s\nwant:\n%s", stdout, want)
+	}
+}
+
+func TestMarkdownEmptyLineBreakDoesNotSplitCellAcrossPages(t *testing.T) {
+	bin := buildBinary(t)
+	input := "Name,Age,City\nAlice,30,\"Tokyo\nHokkaido\"\nBob,25,Osaka\nKen,43,Kyoto\n"
+	stdout := run(t, bin, input, "--output=md", "--md-align-border", "--line-break=", "--table-max-lines=4")
+	pages := strings.Split(stdout, "<!-- page ")
+	// 1ページ目: ヘッダー2行 + Alice（2行）= 4行
+	// 2ページ目: ヘッダー2行 + Bob（1行）+ Ken（1行）= 4行
+	// よりページ区切りは 1 つだけで、総ページ数は 2
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages (cell should not be split), got %d\n%s", len(pages), stdout)
+	}
+	// Tokyo と Hokkaido が同じページにあることを確認
+	if !strings.Contains(pages[0], "Tokyo") || !strings.Contains(pages[0], "Hokkaido") {
+		t.Errorf("Tokyo and Hokkaido should be on the same page:\n%s", stdout)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	bin := buildBinary(t)
 	cmd := exec.Command(bin, "--version")

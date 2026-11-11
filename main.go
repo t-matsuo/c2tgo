@@ -71,6 +71,9 @@ func main() {
 	tableMaxWidth := flag.Int("table-max-width", 0, "maximum display width of a single text table row. behaves like --auto-fit but uses the given width instead of the terminal width. ignores --cell-max-width (text only)")
 	flag.IntVar(tableMaxWidth, "w", 0, "maximum display width of a single text table row (shorthand)")
 	mdCodeBlock := flag.Bool("md-code-block", false, "wrap each MD cell content in code blocks")
+	mdAlignBorder := flag.Bool("md-align-border", false, "align Markdown table vertical borders per column")
+	minimal := flag.Bool("minimal", false, "omit top, bottom, and inline horizontal borders in text output")
+	flag.BoolVar(minimal, "m", false, "minimal text table (shorthand)")
 	tableMaxByte := flag.Int64("table-max-byte", 0, "maximum byte size per page of table output (0 for unlimited)")
 	tableMaxRows := flag.Int("table-max-rows", 0, "maximum number of data rows per page (0 for unlimited)")
 	flag.IntVar(tableMaxRows, "R", 0, "maximum number of data rows per page (shorthand)")
@@ -114,9 +117,22 @@ func main() {
 		return
 	}
 
+	// --minimal は上罫線・下罫線・内部水平罫線を空文字にする（個別指定があればそこを優先）
+	if *minimal {
+		if !isFlagSet("top-border") {
+			*topBorder = ""
+		}
+		if !isFlagSet("bottom-border") {
+			*bottomBorder = ""
+		}
+		if !isFlagSet("inline-h-border") {
+			*inlineHBorder = ""
+		}
+	}
+
 	// 半角 1 文字に制限（空文字は許可するオプションあり）
-	checkSingleChar("--top-border", *topBorder)
-	checkSingleChar("--bottom-border", *bottomBorder)
+	checkSingleCharOrEmpty("--top-border", *topBorder)
+	checkSingleCharOrEmpty("--bottom-border", *bottomBorder)
 	checkSingleChar("--left-border", *leftBorder)
 	checkSingleChar("--right-border", *rightBorder)
 	checkSingleChar("--header-border", *headerBorder)
@@ -281,7 +297,7 @@ func main() {
 			*cornerChar, *inlineHBorder, *inlineVBorder, lineBreak, *autoFit, fitWidth)
 		printTable(t, *tableMaxByte, effectiveTableMaxRows, *tableMaxLines, *pageBreak)
 	default: // md
-		t := buildMarkdownTable(rows, maxCols, lineBreak, cellMaxWidths, *mdCodeBlock)
+		t := buildMarkdownTable(rows, maxCols, lineBreak, cellMaxWidths, *mdCodeBlock, *mdAlignBorder)
 		printTable(t, *tableMaxByte, effectiveTableMaxRows, *tableMaxLines, *pageBreak)
 	}
 }
@@ -356,38 +372,115 @@ func parseCellMaxWidths(s string, colCount int) ([]int, error) {
 // ---- 表データの組み立て ----
 
 // Markdown 形式の表データを組み立てる
-func buildMarkdownTable(rows [][]string, maxCols int, lineBreak string, cellMaxWidths []int, mdCodeBlock bool) tableData {
-	processedRows := make([][]string, len(rows))
+func buildMarkdownTable(rows [][]string, maxCols int, lineBreak string, cellMaxWidths []int, mdCodeBlock, mdAlignBorder bool) tableData {
+	// 各セルを論理行に分解する。
+	// lineBreak が空の場合は改行をそのまま複数行として出力する。
+	// それ以外の場合は 1 行にまとめる。
+	cellLines := make([][][]string, len(rows))
 	for r, row := range rows {
-		processedRow := make([]string, len(row))
+		cellLines[r] = make([][]string, maxCols)
 		for c, cell := range row {
-			s := cell
-			s = strings.ReplaceAll(s, "\r\n", lineBreak)
-			s = strings.ReplaceAll(s, "\r", lineBreak)
-			s = strings.ReplaceAll(s, "\n", lineBreak)
-			// 長さ制限を適用（``` は含めない）
-			maxW := cellMaxWidths[c]
-			if maxW > 0 && getDisplayWidth(s) > maxW {
-				s = truncateWithEllipsis(s, maxW)
+			var lines []string
+			if lineBreak != "" {
+				s := cell
+				s = strings.ReplaceAll(s, "\r\n", lineBreak)
+				s = strings.ReplaceAll(s, "\r", lineBreak)
+				s = strings.ReplaceAll(s, "\n", lineBreak)
+				lines = []string{s}
+			} else {
+				normalized := strings.ReplaceAll(cell, "\r\n", "\n")
+				normalized = strings.ReplaceAll(normalized, "\r", "\n")
+				lines = strings.Split(normalized, "\n")
 			}
-			// コードブロックで囲む
-			if mdCodeBlock {
-				s = "```" + s + "```"
+			for i, s := range lines {
+				// 長さ制限を適用（``` は含めない）
+				maxW := cellMaxWidths[c]
+				if maxW > 0 && getDisplayWidth(s) > maxW {
+					s = truncateWithEllipsis(s, maxW)
+				}
+				// コードブロックで囲む
+				if mdCodeBlock {
+					s = "```" + s + "```"
+				}
+				lines[i] = s
 			}
-			processedRow[c] = s
+			cellLines[r][c] = lines
 		}
-		processedRows[r] = processedRow
+	}
+
+	// 罫線を揃える場合は各列の表示幅を計算する（Markdown 区切り行は最低 3 文字必要）
+	var colWidths []int
+	if mdAlignBorder {
+		colWidths = make([]int, maxCols)
+		for _, row := range cellLines {
+			for c, lines := range row {
+				for _, line := range lines {
+					if w := getDisplayWidth(line); w > colWidths[c] {
+						colWidths[c] = w
+					}
+				}
+			}
+		}
+		for c := range colWidths {
+			if colWidths[c] < 3 {
+				colWidths[c] = 3
+			}
+		}
 	}
 
 	var t tableData
-	// ヘッダー行＋区切り行
-	t.headerLines = []string{
-		"| " + strings.Join(processedRows[0], " | ") + " |",
-		"| " + strings.Join(repeatStr("---", maxCols), " | ") + " |",
+
+	// ヘッダー行
+	headerCells := make([]string, maxCols)
+	for c := 0; c < maxCols; c++ {
+		s := ""
+		if len(cellLines[0][c]) > 0 {
+			s = cellLines[0][c][0]
+		}
+		if mdAlignBorder {
+			s = padRight(s, colWidths[c])
+		}
+		headerCells[c] = s
 	}
-	// 各データ行は 1 行ユニット
-	for _, row := range processedRows[1:] {
-		t.units = append(t.units, []string{"| " + strings.Join(row, " | ") + " |"})
+	t.headerLines = append(t.headerLines, "| "+strings.Join(headerCells, " | ")+" |")
+
+	// 区切り行
+	sepCells := make([]string, maxCols)
+	for c := 0; c < maxCols; c++ {
+		w := 3
+		if mdAlignBorder {
+			w = colWidths[c]
+		}
+		sepCells[c] = strings.Repeat("-", w)
+	}
+	t.headerLines = append(t.headerLines, "| "+strings.Join(sepCells, " | ")+" |")
+
+	// データ行：セル内改行があれば追加の行を出力する。
+	// 1 つの CSV 行から生成された複数行は 1 ユニットとしてまとめ、
+	// ページ分割時に同じセルのデータが分断されないようにする。
+	for _, row := range cellLines[1:] {
+		maxLines := 0
+		for _, lines := range row {
+			if len(lines) > maxLines {
+				maxLines = len(lines)
+			}
+		}
+		unit := make([]string, 0, maxLines)
+		for i := 0; i < maxLines; i++ {
+			cells := make([]string, maxCols)
+			for c := 0; c < maxCols; c++ {
+				s := ""
+				if i < len(row[c]) {
+					s = row[c][i]
+				}
+				if mdAlignBorder {
+					s = padRight(s, colWidths[c])
+				}
+				cells[c] = s
+			}
+			unit = append(unit, "| "+strings.Join(cells, " | ")+" |")
+		}
+		t.units = append(t.units, unit)
 	}
 	return t
 }
@@ -466,10 +559,10 @@ func buildTextTable(rows [][]string, maxCols int, cellMaxWidths []int, top, bott
 	t.inlineBorder = generateBorderRow(colWidths, inlineH, corner)
 	t.borderLast = generateBorderRow(colWidths, bottom, corner)
 
-	// ヘッダーブロック: 上罫線＋ヘッダー行＋ヘッダー罫線
+	// ヘッダーブロック: 上罫線（空でなければ）＋ヘッダー行＋ヘッダー罫線
 	// （ヘッダーセル内に改行があれば複数物理行になるためすべて追加する）
-	t.headerLines = []string{
-		generateBorderRow(colWidths, top, corner),
+	if top != "" {
+		t.headerLines = append(t.headerLines, generateBorderRow(colWidths, top, corner))
 	}
 	t.headerLines = append(t.headerLines, buildRowLines(cellLines[0], colWidths, inlineV, left, right)...)
 	t.headerLines = append(t.headerLines, generateBorderRow(colWidths, header, corner))
